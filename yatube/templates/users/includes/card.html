@@ -1,0 +1,33 @@
+<div class="row justify-content-center">
+    <div class="col-md-8 p-5">
+      <div class="card">
+        <div class="card-header">{{ card_header }}</div>
+        <div class="card-body"> <p>{{ card_body }}</p>
+          {% if form %}
+            {% include 'users/includes/form.html' %}
+            <div class="col-md-6 offset-md-4">
+              {% if 'login' in request.path %}
+                <button type="submit" class="btn btn-primary">
+                  Войти
+                </button>
+                <a href="{% url 'users:password_reset_email' %}" class="btn btn-link">
+                  Забыли пароль?
+                </a>
+              {% elif 'signup' in request.path %}
+                <button type="submit" class="btn btn-primary">
+                  Зарегистрироваться
+                </button>
+              {% else %}
+                <button type="submit" class="btn btn-primary">
+                  Отправить
+                </button>
+              {% endif %}
+            </div>
+          {% endif %}
+          {% if 'complete' in request.path %}
+              <a href="{% url 'users:login' %}"> войти </a>
+          {% endif %}
+        </div> <!-- card body -->
+      </div> <!-- card -->
+    </div> <!-- col -->
+  </div> <!-- row --> 
