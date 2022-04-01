@@ -1,11 +1,17 @@
-from django.test import TestCase, Client
+from django.test import TestCase, Client, override_settings
 from django.contrib.auth import get_user_model
 from django import forms
 from ..models import Follow, Post, Group, Comment
 from django.urls import reverse
+import tempfile
+import shutil
+from django.conf import settings
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.cache import cache
 
 
 User = get_user_model()
+TEMP_MEDIA_ROOT = tempfile.mkdtemp(dir=settings.BASE_DIR)
 
 
 class TemplateViewsTest(TestCase):
@@ -49,6 +55,7 @@ class TemplateViewsTest(TestCase):
                 self.assertTemplateUsed(response, template)
 
 
+@override_settings(MEDIA_ROOT=TEMP_MEDIA_ROOT)
 class ContextTest(TestCase):
     @classmethod
     def setUpClass(cls):
@@ -66,6 +73,11 @@ class ContextTest(TestCase):
                 group=cls.group,
                 author_id=cls.user.id))
         Post.objects.bulk_create(articles)
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        shutil.rmtree(TEMP_MEDIA_ROOT, ignore_errors=True)
 
     def setUp(self):
         self.authenticated_user = Client()
@@ -100,6 +112,7 @@ class ContextTest(TestCase):
         self.assertEqual(list(expected), value)
 
     def test_profile_posts(self):
+        """Проверка постов в профиле"""
         expected = Post.objects.filter(author_id=ContextTest.user.id)[:10]
         response = self.authenticated_user.get(reverse(
             'posts:profile',
@@ -109,6 +122,7 @@ class ContextTest(TestCase):
         self.assertEqual(list(expected), value)
 
     def test_post_detail(self):
+        """Проверка конкретного поста"""
         expected = Post.objects.get(id=1)
         response = self.authenticated_user.get(
             reverse('posts:post_detail', kwargs={'post_id': '1'})
@@ -174,7 +188,7 @@ class ContextTest(TestCase):
                 self.assertIn(new_post, page_obj)
 
     def test_post_another_group(self):
-        """Проверка наличия поста в грппе и его отсутвие в другой"""
+        """Проверка наличия поста в группе и его отсутвие в другой"""
         new_group = Group.objects.create(
             title='Second_test_group',
             slug='second_group',
@@ -200,6 +214,62 @@ class ContextTest(TestCase):
         other_group = response_other_group.context.get('page_obj').object_list
         self.assertIn(new_post, posts)
         self.assertNotIn(new_post, other_group)
+
+    def test_image_pages(self):
+        """Проверка наличия изображения на страницах"""
+        small_gif = (
+            b'\x47\x49\x46\x38\x39\x61\x02\x00'
+            b'\x01\x00\x80\x00\x00\x00\x00\x00'
+            b'\xFF\xFF\xFF\x21\xF9\x04\x00\x00'
+            b'\x00\x00\x00\x2C\x00\x00\x00\x00'
+            b'\x02\x00\x01\x00\x00\x02\x02\x0C'
+            b'\x0A\x00\x3B'
+        )
+        uploaded = SimpleUploadedFile(
+            name='small.gif',
+            content=small_gif,
+            content_type='image/gif'
+        )
+
+        form_data = {
+            'text': 'test_text',
+            'group': ContextTest.group.id,
+            'image': uploaded
+        }
+        self.authenticated_user.post(
+            reverse('posts:post_create'),
+            data=form_data,
+            follow=True
+        )
+        new_post = Post.objects.get(
+            text='test_text',
+            group=ContextTest.group,
+            image='posts/small.gif'
+        )
+        urls = [
+            reverse('posts:index'),
+            reverse(
+                'posts:profile',
+                kwargs={'username': ContextTest.user}
+            ),
+            reverse(
+                'posts:current_post',
+                kwargs={'slug': ContextTest.group.slug}
+            )
+        ]
+        for url in urls:
+            with self.subTest(url=url):
+                response = self.authenticated_user.get(url)
+                page_obj = response.context.get('page_obj').object_list
+                self.assertIn(new_post, page_obj)
+        post_detail_response = self.authenticated_user.get(
+            reverse(
+                'posts:post_detail',
+                kwargs={'post_id': new_post.id}
+            )
+        )
+        post_detail_post = post_detail_response.context.get('post')
+        self.assertEqual(new_post, post_detail_post)
 
 
 class CommentsTest(TestCase):
@@ -274,8 +344,13 @@ class CacheTest(TestCase):
     def test_index_cache(self):
         """Проверка работы кеширования на главной странице"""
         response = self.authenticated_user.get(reverse('posts:index'))
-        CacheTest.new_post.delete()
         self.assertIn('test_text', str(response.content))
+        CacheTest.new_post.delete()
+        response = self.authenticated_user.get(reverse('posts:index'))
+        self.assertIn('test_text', str(response.content))
+        cache.clear()
+        response = self.authenticated_user.get(reverse('posts:index'))
+        self.assertNotIn('test_text', str(response.content))
 
 
 class FollowTest(TestCase):
@@ -296,7 +371,7 @@ class FollowTest(TestCase):
         self.second_user.force_login(FollowTest.second_user)
 
     def test_user_follow(self):
-        """Проверка подписки и отписки авторизированного пользователя"""
+        """Проверка подписки"""
         follow_response = self.second_user.get(reverse(
             'posts:profile_follow',
             kwargs={'username': FollowTest.first_user}
@@ -314,6 +389,13 @@ class FollowTest(TestCase):
             str(follow_index_response.content)
         )
         self.assertRedirects(follow_response, '/follow/')
+
+    def test_user_unfollow(self):
+        """Проверка отписки"""
+        self.second_user.get(reverse(
+            'posts:profile_follow',
+            kwargs={'username': FollowTest.first_user}
+        ), follow=True)
         unfollow_response = self.second_user.get(reverse(
             'posts:profile_unfollow',
             kwargs={'username': FollowTest.first_user}
@@ -333,6 +415,7 @@ class FollowTest(TestCase):
         self.assertRedirects(unfollow_response, '/follow/')
 
     def test_follow_index(self):
+        """Проверка страницы подсписок"""
         self.second_user.get(
             reverse(
                 'posts:profile_follow',
