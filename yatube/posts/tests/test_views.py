@@ -392,10 +392,10 @@ class FollowTest(TestCase):
 
     def test_user_unfollow(self):
         """Проверка отписки"""
-        self.second_user.get(reverse(
-            'posts:profile_follow',
-            kwargs={'username': FollowTest.first_user}
-        ), follow=True)
+        Follow.objects.create(
+            user=FollowTest.second_user,
+            author=FollowTest.first_user
+        )
         unfollow_response = self.second_user.get(reverse(
             'posts:profile_unfollow',
             kwargs={'username': FollowTest.first_user}
